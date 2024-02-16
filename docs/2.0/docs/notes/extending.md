@@ -7,50 +7,56 @@
 > 原始地址：<https://pytorch.org/docs/stable/notes/extending.html>
 
 
- 在这篇文章中，我们将介绍扩展 [`torch.nn`](../nn.html#module-torch.nn "torch.nn") 、 [`torch.autograd`](../autograd.html#module-torch.autograd "torch.autograd") 、 [`torch`](../torch.html#module-torch "torch") ，以及编写自定义 C++ 扩展。
+ 在这篇文章中，我们将介绍如何扩展 [`torch.nn`](../nn.html#module-torch.nn "torch.nn") 、 [`torch.autograd`](../autograd.html#module-torch.autograd "torch.autograd") 、 [`torch`](../torch.html#module-torch "torch") 以及编写自定义 C++ 扩展（extension）。
 
 
 ## 扩展 [`torch.autograd`](../autograd.html#module-torch.autograd "torch.autograd")[¶](#extending-torch-autograd "永久链接到此标题")
 
 
- 向 [`autograd`](../autograd.html#module-torch.autograd "torch.autograd") 添加操作需要实现一个新的 [`Function`](../autograd.html#torch.autograd.Function " torch.autograd.Function") 每个操作的子类。回想一下，函数是 [`autograd`](../autograd.html#module-torch.autograd "torch.autograd") 用于对操作历史记录和计算梯度进行编码的函数。
+ 要向自动微分机制（[`autograd`](../autograd.html#module-torch.autograd "torch.autograd")）中添加新运算，你需要为每个新运算实现一个新的 [`Function`](../autograd.html#torch.autograd.Function " torch.autograd.Function") 子类。回想一下：自动微分机制（[`autograd`](../autograd.html#module-torch.autograd "torch.autograd")）正是使用 `Function` 来编码操作历史记录和计算梯度的。
 
 
- 本文档的第一部分重点介绍后向模式 AD，因为它是使用最广泛的功能。最后的一节讨论了前向模式 AD 的扩展。
+ 本文档的第一部分重点介绍后向模式的自动微分（因为这是使用最为广泛的特性）。文末会讨论如何扩展前向模式自动微分。
 
 
-### 何时使用 [¶](#when-to-use "此标题的永久链接")
+### 适合使用的场景 [¶](#when-to-use "此标题的永久链接")
 
 
- 一般来说，如果您想在模型中执行不可微分或依赖于非 PyTorch 库(例如 NumPy)的计算，但仍希望您的操作与其他操作链接并使用 autograd 引擎，请实现自定义函数。
+ 一般来说，如果你想在模型中执行不可微分或依赖于非 PyTorch 库（例如 NumPy）的计算，但仍希望您的操作与其他操作链接并使用自动微分引擎，你就需要实现自定义函数。
 
 
- 在某些情况下，自定义函数也可用于提高性能和内存使用率：如果您使用 [C++ 扩展](https://pytorch.org/tutorials/advanced/cpp_extension.html) 实现前向和后向传递，您可以将它们包装在 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 中以与 autogradengine 交互。如果您想减少为向后传递保存的缓冲区数量，可以使用自定义函数将操作组合在一起。
+ 在某些情况下，自定义函数也可用于提高性能和内存使用率：如果您使用 [C++ 扩展](https://pytorch.org/tutorials/advanced/cpp_extension.html) 实现了前向和后向传播过程，则可以将它们包装在 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 中以满足自动微分引擎所需要的接口。如果您想减少为后向传播过程保存的缓冲区数量，可以使用自定义函数将运算组合在一起。
 
 
-### 何时不使用 [¶](#when-not-to-use "永久链接到此标题")
+### 不适合使用的场景 [¶](#when-not-to-use "永久链接到此标题")
 
 
- 如果您已经可以根据 PyTorch 的内置操作编写函数，则其后向图(很可能)已经能够由 autograd 记录。在这种情况下，您不需要自己实现向后函数。考虑使用普通的 Python 函数。
+ 如果你已经可以根据 PyTorch 的内置运算编写函数，则其后向图（大概率）已经能够由自动微分机制记录。在这种情况下，你就不需要自己实现后向传播函数了。考虑使用普通的 Python 函数即可。
+ 
 
 
- 如果您需要维护状态，即可训练参数，您应该(也)使用自定义模块。有关扩展 [`torch.nn`](../nn.html#module-torch.nn "torch.nn") 的更多信息，请参阅下面的部分。
+ 如果您需要维护状态（即可训练参数），您也应该使用自定义模块（module）。有关扩展 [`torch.nn`](../nn.html#module-torch.nn "torch.nn") 的更多信息，请参阅下面的部分。
 
 
- 如果您想在向后传递过程中改变梯度或执行副作用，请考虑注册一个[tensor](https://pytorch.org/docs/stable/generated/torch.Tensor.register_hook.html#torch.Tensor.register_hook) 或 [模块](https://pytorch.org/docs/stable/notes/modules.html#module-hooks) 钩子。
+ 如果您想在后向传播过程中改变梯度或执行副作用，请考虑注册一个 [tensor](https://pytorch.org/docs/stable/generated/torch.Tensor.register_hook.html#torch.Tensor.register_hook) 或 [模块](https://pytorch.org/docs/stable/notes/modules.html#module-hooks) 钩子。
 
 
-### 如何使用 [¶](#how-to-use "此标题的永久链接")
+### 使用方法 [¶](#how-to-use "此标题的永久链接")
 
 
- 采取以下步骤： 1．子类 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 并实现 [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward") ,(可选) `setup_context()` 和 [`backward()`](../generated/torch.autograd.Function.backward.html#torch.autograd.Function.backward "torch.autograd.Function.backward") 方法.2.对 ctx 参数调用正确的方法。3.声明你的函数是否支持[double backward](https://pytorch.org/tutorials/intermediate/custom_function_double_backward_tutorial.html).4.使用 gradcheck 验证您的渐变是否正确。
+ 采取以下步骤：
+ 
+ 1．继承 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 并实现 [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward") 、 `setup_context()` （可选）以及 [`backward()`](../generated/torch.autograd.Function.backward.html#torch.autograd.Function.backward "torch.autograd.Function.backward") 方法。
+ 2.对 `ctx` 参数调用正确的方法。
+ 3.声明你的函数是否支持 [二次后向传播（double backward）](https://pytorch.org/tutorials/intermediate/custom_function_double_backward_tutorial.html)。
+ 4.使用 `gradcheck` 验证梯度是否正确。
 
 
-**步骤1：**子类化 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 后，您需要定义 3 个方法：
+**步骤1：**继承 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 后，您需要定义 3 个方法：
 
 
 
-* [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward") 是执行该操作的代码。它可以接受任意数量的参数，如果您指定默认值，其中一些参数是可选的。这里接受所有类型的 Python 对象。跟踪历史记录的“Tensor”参数(即使用“requires_grad=True”)将在调用之前转换为不跟踪历史记录的参数，并且它们的使用将在图中注册。请注意，此逻辑不会遍历列表/字典/任何其他数据结构，并且只会考虑作为调用的直接参数的tensor。您可以返回单个 `Tensor` 输出，或者返回一个 [`tuple`](https://docs.python.org/3/library/stdtypes.html#tuple "(in Python v3.12)") 常量(如果存在)是多个输出。另外，请参阅 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 的文档来查找只能从 [`forward()` 调用的有用方法的描述](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward").
+* [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward") 是执行该运算的代码。它可以接受任意数量的参数，你可以让其中一些参数是可选参数，只要这些参数设置有默认值。参数可以是任意类型的 Python 对象。跟踪历史记录的 tensor 参数（即 `requires_grad=True` 的 tensor）将在调用此方法前被转换为不跟踪历史记录的参数，并且它们的使用将在计算图中注册。请注意，此逻辑不会遍历列表/字典/任何其他数据结构，并且只会考虑作为调用的直接参数的tensor。您可以返回单个 `Tensor` 输出，或者返回一个 [`tuple`](https://docs.python.org/3/library/stdtypes.html#tuple "(in Python v3.12)") 常量(如果存在)是多个输出。另外，请参阅 [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 的文档来查找只能从 [`forward()` 调用的有用方法的描述](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward").
 * `setup_context()` (可选)。人们可以编写一个“组合”[`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward")，它接受`ctx` 对象或(从 PyTorch 2.0 开始)单独的 [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward")，不接受 `ctx` 和发生 `ctx` 修改的 `setup_context()` 方法。 [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward") 应该有计算，而 `setup_context()` 应该只负责 `ctx` 修改(并且没有任何计算)。一般来说单独的 [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward") 和 `setup_context()` 是更接近PyTorch本机操作的工作方式，因此更适合与各种PyTorch子系统组合。有关更多详细信息，请参阅[组合或单独的forward()和setup_context()](#combining-forward-context)。
 * [`backward()`](../generated/torch.autograd.Function.backward.html#torch.autograd.Function.backward "torch.autograd.Function.backward") (或 `vjp()` ) 定义梯度公式。它将给出“Tensor”参数与输出一样多，每个参数代表梯度 w.r.t。那个输出。重要的是切勿就地修改这些内容。它应该返回与输入一样多的tensor，每个tensor都包含梯度。其相应的输入。如果您的输入不需要梯度(“needs_input_grad”是一个布尔元组，指示每个输入是否需要梯度计算)，或者是非“Tensor”对象，则可以返回“python:None”。另外，如果您有 [`forward()`](../generated/torch.autograd.Function.forward.html#torch.autograd.Function.forward "torch.autograd.Function.forward") 的可选参数，您可以返回梯度比输入更多，只要它们都是 [`None`](https://docs.python.org/3/library/constants.html#None "(in Python v3.12)") 。
 
