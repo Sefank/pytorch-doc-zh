@@ -7,95 +7,91 @@
 > 原始地址：<https://pytorch.org/docs/stable/notes/autograd.html>
 
 
- 本笔记将概述 autograd 的工作原理并记录操作。并不是绝对有必要理解所有这些，但我们建议您熟悉它，因为它将帮助您编写更高效、更简洁的程序，并可以帮助您进行调试。
+ 本说明概述了 autograd 的工作原理以及 autograd 是如何记录操作的。并不是说要完全了解这些内容，但我们还是建议你熟悉这些原理，以便让你编写的程序更高效、更简洁，也便于你调试代码。
 
 
-## autograd 如何编码历史记录 [¶](#how-autograd-encodes-the-history "永久链接到此标题")
+## autograd 记录历史的方式 [¶](#how-autograd-encodes-the-history "永久链接到此标题")
 
 
- Autograd 是一种反向自动微分系统。从概念上讲，autograd 记录了一个图，记录了执行操作时创建数据的所有操作，为您提供一个有向无环图，其叶子是输入tensor，根是输出tensor。通过从根到叶子追踪该图，您可以自动计算使用链式法则的梯度。
+ autograd 是一种反向自动微分机制。从概念上讲，自动微分机制在执行操作的同时会记录一张计算图，其中记录着创建了数据的所有运算。计算图是一张有向无环图，其中的叶结点是输入的 tensor，根结点则是输出的 tensor。在这张图中，使用链式法则从根结点追踪到叶结点，就可以自动计算出梯度。
 
 
- 在内部，autograd 将此图表示为“Function”对象(实际上是表达式)的图，可以对其进行“apply()”编辑以计算评估该图的结果。在计算前向传递时，autograd 同时执行请求的计算并构建一个表示计算梯度的函数的图(每个 [`torch.Tensor`](../tensors.html#torch.tensor“torch.Tensor”)是该图的入口点)。当前向传递完成时，我们在后向传递中评估该图以计算梯度。
+ 在内部，autograd 将这张计算图表示为由 `Function` 对象（实际上是表达式）构成的图，可以 `apply()` 这些对象来计算图的求值结果。在计算前向传递过程（forward pass）时，autograd 会同时执行所需的计算，并建立一个由计算梯度的函数组成的图（每个 [`torch.Tensor`](../../tensors/#torch.tensor) 的 `.grad_fn` 属性都是该图的一个入口点）。完成前向传递过程后，我们会在后向传递过程中对这张图进行求值，以计算梯度。
 
 
- 需要注意的重要一点是，图形在每次迭代时都会从头开始重新创建，这正是允许使用任意 Python 控制流语句的原因，这些语句可以在每次迭代时更改图形的整体形状和大小。在启动训练之前，您不必对所有可能的路径进行编码 
-- 您运行的内容就是您所区分的。
+ 需要注意的是，计算图在每次迭代时都会从头开始重新创建，这也正是可以使用任意 Python 控制流语句的原因，因为这样一来就可以在每次迭代时改变图的整体形态和大小。在启动训练之前，你不必编写所有可能的运算路径 —— 你所执行的代码就是被计算微分的代码。
 
 
-### 保存的tensor [¶](#saved-tensors "此标题的固定链接")
+### 保存的 tensor [¶](#saved-tensors "此标题的固定链接")
 
 
- 某些操作需要在前向传递期间保存中间结果，以便执行后向传递。例如，函数 $x ↦ x^2$ 保存输入 $x$ 来计算梯度。
+ 有些运算需要在前向传递过程中保存中间结果，以便进行后向传递。例如，函数 $x \mapsto x^2$ 需要保存输入 $x$ 来计算梯度。
 
 
- 定义自定义 Python [`Function`](../autograd.html#torch.autograd.Function "torch.autograd.Function") 时，可以使用 `save_for_backward()` 在前向传递过程中保存tensor和`saved_tensors`以在向后传递期间检索它们。有关更多信息，请参阅[扩展 PyTorch](extending.html)。
+ 定义自定义 Python [`Function`](../../autograd/#torch.autograd.Function "torch.autograd.Function") 时，可以使用 `save_for_backward()` 在前向传递过程中保存 tensor，然后在后向传递过程中使用 `saved_tensors` 来读取这些 tensor。详情请参阅[扩展 PyTorch](../extending/)。
 
 
- 对于 PyTorch 定义的操作(例如 [`torch.pow()`](../generated/torch.pow.html#torch.pow "torch.pow") )，tensor会根据需要自动保存。您可以通过查找以前缀“_saved”开头的属性来探索(出于教育或调试目的)某个“grad_fn”保存了哪些tensor。
+ 对于 PyTorch 定义的运算（例如 [`torch.pow()`](../../generated/torch.pow#torch.pow "torch.pow") ），tensor 会根据需要自动保存。出于教学或调试目的，你可以查找 tensor 中以 `_saved` 开头的属性来了解 `grad_fn` 保存了哪些 tensor。
 
 
-```
+``` 
 x = torch.randn(5, requires_grad=True)
 y = x.pow(2)
 print(x.equal(y.grad_fn._saved_self))  # True
 print(x is y.grad_fn._saved_self)  # True
-
 ```
 
 
- 在前面的代码中， `y.grad_fn._saved_self` 引用与 x 相同的 Tensor 对象。但情况可能并不总是如此。例如：
+ 在上述代码中， `y.grad_fn._saved_self` 引用与 `x` 相同的 tensor 对象。但可能并不总是如此。例如：
 
 
-```
+``` 
 x = torch.randn(5, requires_grad=True)
 y = x.exp()
 print(y.equal(y.grad_fn._saved_result))  # True
 print(y is y.grad_fn._saved_result)  # False
-
 ```
 
 
- 在幕后，为了防止引用循环，PyTorch“打包”了保存的tensor，并将其“解包”到不同的tensor中以供读取。在这里，您通过访问“y.grad_fn._saved_result”获得的tensor是与“y”不同的tensor对象(但它们仍然共享相同的存储)。
+ 在幕后，为了防止循环引用，PyTorch “打包”（pack）了保存的 tensor，并将其“解包”（unpack）到不同的 tensor 中以供读取。在这个例子中，访问 `y.grad_fn._saved_result` 获得的 tensor 与 `y` 是不同的 tensor 对象（但它们仍然共享相同的存储空间）。
 
 
- tensor是否会被打包到不同的tensor对象中取决于它是否是其自己的 grad_fn 的输出，这是一个可能会更改的实现细节，用户不应依赖。
+ tensor 是否会被打包到不同的 tensor 对象中，取决于它是否是其自己的 `grad_fn` 的输出，这是一个可能会更改的实现细节，用户不应依赖。
 
 
- 您可以使用 [保存tensor的钩子](#saved-tensors-hooks-doc) 控制 PyTorch 如何打包/解包。
+ 您可以使用 [保存 tensor 的钩子](#saved-tensors-hooks-doc) 来控制 PyTorch 如何打包/解包。
 
 
 ## 不可微函数的梯度 [¶](#gradients-for-non-Differentiable-functions "永久链接到此标题")
 
 
- 使用自动微分的梯度计算仅在使用的每个初等函数可微时才有效。不幸的是，我们在实践中使用的许多函数不具有此属性(例如，“0”处的“relu”或“sqrt”)。为了尝试减少不可微函数的影响，我们通过按顺序应用以下规则来定义基本运算的梯度：
+ 使用自动微分机制执行梯度计算的前提是所使用的每个组成的子函数都可微。不幸的是，在实践中我们使用的许多函数不具有此属性（例如，`relu` 以及 `sqrt` 在 `0` 处时就不可微）。为了尝试减少不可微函数的影响，我们通过按以下规则来定义基本运算的梯度：
 
 
-1. 如果函数可微，因此当前点存在梯度，请使用它。
-2. 如果函数是凸函数(至少是局部凸函数)，则使用最小范数的次梯度(即最速下降方向)。
-3. 如果函数是凹函数(至少是局部凹函数)，则使用最小范数的超梯度(考虑 -f(x) 并应用前一点)。
-4. 如果定义了函数，则通过连续性定义当前点的梯度(请注意，此处可以使用“inf”，例如“sqrt(0)”)。如果可能有多个值，请任意选择一个。
-5. 如果函数未定义(例如 `sqrt(-1)` 、 `log(-1)` 或输入为 `NaN` 时的大多数函数)，则用作梯度的值是任意的(我们也可以提出一个错误，但不能保证)。大多数函数将使用“NaN”作为梯度，但出于性能原因，某些函数将使用其他值(例如“log(-1)”)。
-6. 如果函数不是确定性映射(即它不是[数学函数](https://en.wikipedia.org/wiki/Function_(mathematics)))，它将被标记为不可微分。如果在“no_grad”环境之外需要 grad 的tensor上使用，这将使其向后出错。
+1. 如果函数可微，则当前点存在梯度，此时就使用这一梯度。
+2. 如果函数是凸函数（至少局部是凸的），则使用最小范数的次梯度（sub-gradient）（即选择最速下降的方向）。
+3. 如果函数是凹函数（至少局部是凹的），则使用最小范数的超梯度（super-gradient）（计算时取 $-f(x)$ 然后参考前一条规则）。
+4. 如果当前点函数有定义，则通过连续性定义当前点的梯度（注意此处可以使用 `inf`，例如 `sqrt(0)`）。如果可能有多个值，则任意选择其中一个。
+5. 如果当前点函数未定义（例如 `sqrt(-1)`、`log(-1)` 或输入为 `NaN` 时的大多数函数），则用作梯度的值是任意的（我们也可能会抛出异常错误，但不能保证一定会）。大多数函数将使用 `NaN` 作为梯度，但出于性能原因，某些函数将使用其他值（例如 `log(-1)`）。
+6. 如果函数不是确定性映射（即它不是[数学意义上的函数](https://en.wikipedia.org/wiki/Function_(mathematics))），它将被标记为不可微分。如果在 `no_grad` 环境之外需要梯度的 tensor 上使用，这将使其向后出错。
 
 
-## 本地禁用梯度计算 [¶](#locally-disabling-gradient-computation "永久链接到此标题")
+## 局部禁用梯度计算 [¶](#locally-disabling-gradient-computation "永久链接到此标题")
 
 
- Python 有多种机制可用于本地禁用梯度计算：
+ Python 有多种机制可用于局部禁用梯度计算：
 
 
- 要禁用整个代码块的梯度，可以使用上下文管理器，例如无梯度模式和推理模式。为了更细粒度地从梯度计算中排除子图，可以设置tensor的“requires_grad”字段。
+ 要禁用整个代码块的梯度，可以使用上下文管理器（例如无梯度（no-grad）模式和推理（inference）模式）。为了更细粒度地从梯度计算中排除子图，可以设置 tensor 的 `requires_grad` 字段。
 
 
- 下面，除了讨论上面的机制之外，我们还描述了评估模式(`nn.Module.eval()`)，这种方法不用于禁用梯度计算，但由于其名称，经常与这三种方法混淆。
+ 在下文中，除了讨论上述机制之外，我们还会介绍求值（evaluation）模式（`nn.Module.eval()`），这种方法不是用来禁用梯度计算的，但由于其名称，经常与这三种方法混淆。
 
 
 ### 设置 `requires_grad`[¶](#setting-requires-grad "永久链接到此标题")
 
 
-`requires_grad` 是一个标志，默认为 false *除非包装在
-* `nn.Parameter` 中，它允许从梯度计算中细粒度地排除子图。它在前向传播和后向传播中都有效：
+`requires_grad` 是一个标志值，默认为 `False`，除非被包装在 `nn.Parameter` 中，它允许在梯度计算中细粒度地排除子图。它在前向传播和后向传播中都起作用：
 
 
  在前向传递过程中，如果至少有一个输入tensor需要 grad，则该操作仅记录在后向图中。在后向传递过程中( `.backward()` )，只有具有 `requires_grad=True` 的叶tensor才会有梯度累积到它们的“.grad”字段中。
