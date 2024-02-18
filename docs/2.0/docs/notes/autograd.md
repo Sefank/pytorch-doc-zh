@@ -91,38 +91,38 @@ print(y is y.grad_fn._saved_result)  # False
 ### 设置 `requires_grad`[¶](#setting-requires-grad "永久链接到此标题")
 
 
-`requires_grad` 是一个标志值，默认为 `False`，除非被包装在 `nn.Parameter` 中，它允许在梯度计算中细粒度地排除子图。它在前向传播和后向传播中都起作用：
+`requires_grad` 是一个标志值，默认为 `False`（除非被包装在 `nn.Parameter` 中）。这一属性允许在梯度计算中细粒度地排除子图，且在前向传播和后向传播中都起作用：
 
 
- 在前向传递过程中，如果至少有一个输入tensor需要 grad，则该操作仅记录在后向图中。在后向传递过程中( `.backward()` )，只有具有 `requires_grad=True` 的叶tensor才会有梯度累积到它们的“.grad”字段中。
+ 在前向传递过程中，运算只有在其输入至少有一个需要记录梯度时，才会被记录到后向传递计算图中。在后向传递过程（`.backward()`）中，只有`requires_grad=True` 的叶结点 tensor 才会有梯度累积到它们的 `.grad` 字段中。
 
 
- 值得注意的是，即使每个tensor都有这个标志，*设置*它只对叶tensor有意义(没有 `grad_fn` 的tensor，例如 `nn.Module` 的参数)。非叶tensor(具有 `grad_fn` 的tensor)是具有与之关联的后向图的tensor。因此，它们的梯度将需要作为中间结果来计算需要梯度的叶tensor的梯度。从这个定义可以清楚地看出，所有非叶tensor将自动具有“require_grad=True”。
+ 需要注意的是：虽然每个 tensor 都有此属性，但该属性实际上只对叶结点的 tensor （即没有 `grad_fn` 的 tensor，比如 `nn.Module` 的参数）有意义。非叶结点的 tensor（即具有 `grad_fn` 的 tensor）会自然而然地关联在后向传递计算图中，因此，其梯度需要作为中间结果来作为计算需要梯度的叶结点 tensor 的梯度。从这个定义来看，很明显所有非叶结点的 tensor 会自动设置有 `require_grad=True`。
 
 
- 设置“requires_grad”应该是控制模型的哪些部分参与梯度计算的主要方式，例如，如果您需要在模型微调期间冻结预训练模型的部分。
+ 设置 `requires_grad` 应该是控制模型的哪些部分要参与梯度计算的主要方式。比方说，假设你需要在微调阶段冻结预训练模型的一些部分：
 
 
- 要冻结模型的某些部分，只需将“.requires_grad_(False)”应用于您不想更新的参数即可。如上所述，由于使用这些参数作为输入的计算不会记录在前向传递中，因此它们的“.grad”字段不会在后向传递中更新，因为它们不会成为第一个中后向图的一部分地点，随心所欲。
+ 要冻结模型的某些部分，只需要在你不想更新的参数上调用 `.requires_grad_(False)`。正如前文所述，由于在前向传递过程中使用这些参数作为输入的计算不会被记录，因此他们的 `.grad` 字段在后向传递过程中就不会被更新，因为这些参数从一开始就不在后向传递计算图中，这也正是我们所希望的。
 
 
- 因为这是一种常见的模式，所以也可以使用 `nn.Module.requires_grad_()` 在模块级别设置 `requires_grad` 。当应用于模块时，`.requires_grad_() ` 对模块的所有参数生效(默认情况下具有 `requires_grad=True`)。
+ 由于这种做法太常用了，`requires_grad` 现在也可以在模块级别来设置，对应的方法是 `nn.Module.requires_grad_()`。当在模块上调用这个方法时，`.requires_grad_()` 会在该模块的所有参数上生效（默认是设置 `requires_grad=True`）。
 
 
-### 毕业模式 [¶](#grad-modes "此标题的永久链接")
+### 梯度模式 [¶](#grad-modes "此标题的永久链接")
 
 
- 除了设置 `requires_grad` 之外，还可以从 Python 中选择三种 grad 模式，这些模式会影响 PyTorch 中的计算在内部如何由 autograd 处理：默认模式(grad 模式)、no-grad 模式和推理模式，所有这些模式可以通过上下文管理器和装饰器进行切换。
+ 除了设置 `requires_grad` 之外，还有三种梯度模式会影响 PyTorch 中的计算在内部如何由 autograd 处理，可供你选用，它们分别是默认（default）模式或者说梯度模式（grad mode）、无梯度（no-grad）模式以及推理（inference）模式。所有这些模式可以使用上下文管理器和装饰器来切换。
 
 
-| 	 Mode	  | 	 Excludes operations from being recorded in backward graph	  | 	 Skips additional autograd tracking overhead	  | 	 Tensors created while the mode is enabled can be used in grad-mode later	  | 	 Examples	  |
+| 	 模式	  | 	 运算不会记录在后向传递计算图中	  | 	 跳过额外的 autograd 跟踪开销	  | 	 在启用该模式时创建的 tensor 可在之后的梯度模式中使用	  | 	 典型使用场景	  |
 | --- | --- | --- | --- | --- |
-| 	 default	  |  |  | 	 ✓	  | 	 Forward pass	  |
-| 	 no-grad	  | 	 ✓	  |  | 	 ✓	  | 	 Optimizer updates	  |
-| 	 inference	  | 	 ✓	  | 	 ✓	  |  | 	 Data processing, model evaluation	  |
+| 	 默认模式（default）	  |  |  | 	 ✓	  | 	 前向传递过程	  |
+| 	 无梯度模式（no-grad）	  | 	 ✓	  |  | 	 ✓	  | 	 优化器更新	  |
+| 	 推理模式（inference）	  | 	 ✓	  | 	 ✓	  |  | 	 数据处理、模型求值	  |
 
 
-### 默认模式(渐变模式)[¶](#default-mode-grad-mode "永久链接到此标题")
+### 默认模式（梯度模式）[¶](#default-mode-grad-mode "永久链接到此标题")
 
 
  “默认模式”是当没有启用其他模式(例如无梯度和推理模式)时我们隐式处于的模式。为了与“无渐变模式”对比，默认模式有时也称为“渐变模式”。
